@@ -1,0 +1,1 @@
+target_sources(FileHasher PRIVATE FileHasher.cpp)

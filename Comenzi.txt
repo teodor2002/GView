@@ -1,0 +1,10 @@
+Pentru refresh Gview:
+GView\bin\Debug -> gview reset
+
+Pentru build (Prof) in Root:
+cmake -B build
+
+Build Chat GPT
+cd build
+cmake ..
+cmake --build .
