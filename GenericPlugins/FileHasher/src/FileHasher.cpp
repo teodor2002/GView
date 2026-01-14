@@ -16,13 +16,12 @@ namespace fs = std::filesystem;
 
 constexpr int CMD_BUTTON_CLOSE  = 1;
 constexpr int CMD_BUTTON_VERIFY = 2;
+constexpr int CMD_BUTTON_UPLOAD = 3;
 
 std::string LoadAPIKey()
 {
     fs::path keyPath = "APIKey.txt";
-
-    if (!fs::exists(keyPath)) 
-    {
+    if (!fs::exists(keyPath)) {
         keyPath = "../APIKey.txt";
         if (!fs::exists(keyPath))
             return "";
@@ -42,8 +41,11 @@ std::string VT_API_KEY;
 class FileHasher : public Window, public Handlers::OnButtonPressedInterface, public Handlers::OnListViewItemPressedInterface
 {
     Reference<ListView> fileList;
-    Reference<Label> lblStatus, lblHash, lblMalicious, lblHarmless, lblLink;
+    Reference<Label> lblStatus, lblHash, lblMalicious, lblHarmless;
+    Reference<TextField> txtLink; // CHANGED: Label -> TextField (to allow copying)
+
     Reference<Button> btnVerify;
+    Reference<Button> btnUpload;
 
     fs::path currentDir;
     fs::path selectedFilePath;
@@ -52,8 +54,6 @@ class FileHasher : public Window, public Handlers::OnButtonPressedInterface, pub
     FileHasher(const fs::path& path) : Window("File Hasher & Scanner", "d:c,w:90%,h:90%", WindowFlags::Sizeable)
     {
         currentDir = path;
-
-        // Safety check for path
         if (currentDir.empty())
             currentDir = ".";
         try {
@@ -79,6 +79,11 @@ class FileHasher : public Window, public Handlers::OnButtonPressedInterface, pub
         btnVerify->Handlers()->OnButtonPressed = this;
         btnVerify->SetEnabled(false);
 
+        // Upload Button (Initially Invisible)
+        btnUpload                              = Factory::Button::Create(rightP, "&Upload File", "x:24,y:1,w:20", CMD_BUTTON_UPLOAD);
+        btnUpload->Handlers()->OnButtonPressed = this;
+        btnUpload->SetVisible(false);
+
         Factory::Label::Create(rightP, "Status:", "x:1,y:4,w:10");
         lblStatus = Factory::Label::Create(rightP, "Select a file...", "x:12,y:4,w:60");
 
@@ -92,7 +97,10 @@ class FileHasher : public Window, public Handlers::OnButtonPressedInterface, pub
         lblHarmless = Factory::Label::Create(rightP, "0", "x:12,y:9,w:60");
 
         Factory::Label::Create(rightP, "Link:", "x:1,y:11,w:10");
-        lblLink = Factory::Label::Create(rightP, "-", "x:12,y:11,w:60");
+
+        // CHANGED: Create a TextField instead of Label
+        txtLink = Factory::TextField::Create(rightP, "-", "x:12,y:11,w:60");
+        // txtLink->SetReadOnly(true); // Optional: prevent editing, but allow copying (if supported by your AppCUI version)
 
         // 4. Bottom Close Button
         Factory::Button::Create(this, "&Close", "d:b,w:20", CMD_BUTTON_CLOSE)->Handlers()->OnButtonPressed = this;
@@ -127,15 +135,14 @@ class FileHasher : public Window, public Handlers::OnButtonPressedInterface, pub
         std::string relPath = std::string(item.GetText(0));
         selectedFilePath    = currentDir / relPath;
 
-        // Update UI to confirm selection
         lblStatus->SetText("File selected. Press Verify.");
         lblHash->SetText("-");
         lblMalicious->SetText("-");
         lblHarmless->SetText("-");
-        lblLink->SetText("-");
+        txtLink->SetText("-"); // CHANGED
 
         btnVerify->SetEnabled(true);
-        btnVerify->SetFocus();
+        btnUpload->SetVisible(false);
     }
 
     void OnButtonPressed(Reference<Button> b) override
@@ -144,18 +151,20 @@ class FileHasher : public Window, public Handlers::OnButtonPressedInterface, pub
             this->Exit();
         } else if (b->GetControlID() == CMD_BUTTON_VERIFY) {
             PerformVerification();
+        } else if (b->GetControlID() == CMD_BUTTON_UPLOAD) {
+            PerformUpload();
         }
     }
 
     void PerformVerification()
     {
         VT_API_KEY = LoadAPIKey();
+        btnUpload->SetVisible(false);
 
         if (selectedFilePath.empty())
             return;
 
         lblStatus->SetText("Hashing...");
-
         std::string hash;
         if (!Hasher::ComputeSHA256(selectedFilePath.string(), hash)) {
             lblStatus->SetText("Error: Failed to compute hash");
@@ -164,7 +173,6 @@ class FileHasher : public Window, public Handlers::OnButtonPressedInterface, pub
         lblHash->SetText(hash);
 
         lblStatus->SetText("Querying VirusTotal...");
-
         VirusTotalResult res;
         std::string err;
 
@@ -173,15 +181,33 @@ class FileHasher : public Window, public Handlers::OnButtonPressedInterface, pub
                 lblStatus->SetText("Analysis Complete");
                 lblMalicious->SetText(std::to_string(res.malicious));
                 lblHarmless->SetText(std::to_string(res.harmless));
-                lblLink->SetText(res.permalink);
+
+                // CHANGED: Update the TextField
+                txtLink->SetText(res.permalink);
             } else {
-                lblStatus->SetText("Hash not found in VT database");
+                lblStatus->SetText("File not found in VT. Upload?");
                 lblMalicious->SetText("Unknown");
                 lblHarmless->SetText("Unknown");
-                lblLink->SetText("-");
+                txtLink->SetText("-"); // CHANGED
+
+                btnUpload->SetVisible(true);
+                btnUpload->SetFocus();
             }
         } else {
             lblStatus->SetText("API Error: " + err);
+        }
+    }
+
+    void PerformUpload()
+    {
+        lblStatus->SetText("Uploading file...");
+        std::string err;
+
+        if (RESTManager::UploadFile(VT_API_KEY, selectedFilePath.string(), err)) {
+            lblStatus->SetText("Scanning file, check again in 60 seconds");
+            btnUpload->SetVisible(false);
+        } else {
+            lblStatus->SetText("Upload Error: " + err);
         }
     }
 };
@@ -197,12 +223,8 @@ PLUGIN_EXPORT bool Run(const string_view command, Reference<GView::Object> curre
                 root = fs::path(pathU16);
             }
         }
-
-        // --- FIX IS HERE ---
-        // Use 'new' to allocate on heap. The window stays alive.
         auto dlg = new FileHasher(root);
         dlg->Show();
-
         return true;
     }
     return false;

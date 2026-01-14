@@ -74,3 +74,57 @@ bool RESTManager::QueryVirusTotal(const std::string& apiKey, const std::string& 
 
     return true;
 }
+
+bool RESTManager::UploadFile(const std::string& apiKey, const std::string& filePath, std::string& outError)
+{
+    outError.clear();
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        outError = "Failed to init CURL";
+        return false;
+    }
+
+    // 1. Prepare the Multipart form (The File)
+    curl_mime* mime     = curl_mime_init(curl);
+    curl_mimepart* part = curl_mime_addpart(mime);
+
+    // Field name must be "file"
+    curl_mime_name(part, "file");
+    curl_mime_filedata(part, filePath.c_str());
+
+    // 2. Set Headers
+    struct curl_slist* headers = nullptr;
+    headers                    = curl_slist_append(headers, ("x-apikey: " + apiKey).c_str());
+
+    // 3. Configure CURL
+    std::string response;
+    curl_easy_setopt(curl, CURLOPT_URL, "https://www.virustotal.com/api/v3/files");
+    curl_easy_setopt(curl, CURLOPT_MIMEPOST, mime); // Attach the file
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "GView-FileHasher");
+
+    // 4. Perform Request
+    CURLcode res  = curl_easy_perform(curl);
+    long httpCode = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+
+    // Cleanup
+    curl_slist_free_all(headers);
+    curl_mime_free(mime);
+    curl_easy_cleanup(curl);
+
+    if (res != CURLE_OK) {
+        outError = "CURL Error: " + std::string(curl_easy_strerror(res));
+        return false;
+    }
+
+    // VT returns 200 OK with the analysis ID if upload is successful
+    if (httpCode == 200) {
+        return true;
+    } else {
+        outError = "Upload failed. HTTP " + std::to_string(httpCode);
+        return false;
+    }
+}
